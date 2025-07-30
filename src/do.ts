@@ -1,7 +1,7 @@
 export class JsonToSqlDO {
 	private sql: SqlStorage;
 
-	constructor(ctx: DurableObjectState, env: Env) {
+	constructor(ctx: DurableObjectState, _env: Env) {
 		this.sql = ctx.storage.sql;
 	}
 
@@ -136,7 +136,7 @@ export class JsonToSqlDO {
 		}
 	}
 
-	private async handleGetSchema(body: any): Promise<Response> {
+	private async handleGetSchema(_body: any): Promise<Response> {
 		try {
 			const metadataResult = this.sql.exec("SELECT key, value FROM _metadata");
 			const metadata: Record<string, string> = {};
@@ -172,7 +172,7 @@ export class JsonToSqlDO {
 		}
 	}
 
-	private async handleCleanup(body: any): Promise<Response> {
+	private async handleCleanup(_body: any): Promise<Response> {
 		try {
 			// Drop main tables
 			this.sql.exec("DROP TABLE IF EXISTS protein");
