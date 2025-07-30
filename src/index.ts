@@ -1,6 +1,6 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { JsonToSqlDO } from "./do.js";
+import { JsonToSqlStorageDO } from "./do.js";
 import { ToolRegistry } from "./tools/index.js";
 import type { ToolContext } from "./tools/index.js";
 
@@ -82,9 +82,9 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 		if (payloadSize > 20480) { // 20KB threshold - hard limit
 			const processedData = this.convertToStagingFormat(data, operationName);
 			
-			// Try primary staging with enhanced error handling
+			// Try primary staging with enhanced error handling and chunking
 			try {
-				const dataAccessId = await this.stageData(processedData);
+				const dataAccessId = await this.stageDataInChunks(processedData, operationName);
 				return { 
 					shouldStage: true, 
 					dataAccessId,
@@ -211,7 +211,7 @@ sql: "SELECT * FROM protein LIMIT 10"
 		}];
 	}
 
-	private async stageData(processedData: any[]): Promise<string> {
+	private async stageDataInChunks(processedData: any[], operationName: string): Promise<string> {
 		const env = this.getEnvironment();
 		if (!env) {
 			throw new Error('Environment not available for staging');
@@ -221,26 +221,49 @@ sql: "SELECT * FROM protein LIMIT 10"
 		const doId = env.JSON_TO_SQL_DO.idFromName(dataAccessId);
 		const doInstance = env.JSON_TO_SQL_DO.get(doId);
 		
-		const stageRequest = new Request('http://localhost/stage', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				operation: 'fetch_and_stage',
-				data: processedData,
-				metadata: {
-					source: 'uniprot_mcp',
-					timestamp: new Date().toISOString(),
-					entity_count: processedData.length
-				}
-			})
-		});
+		// Chunk data to avoid request size limits (process in chunks of 50 items)
+		const chunkSize = 50;
+		const chunks = [];
+		for (let i = 0; i < processedData.length; i += chunkSize) {
+			chunks.push(processedData.slice(i, i + chunkSize));
+		}
 
-		const response = await doInstance.fetch(stageRequest);
-		if (!response.ok) {
-			throw new Error(`Failed to stage data: ${response.statusText}`);
+		console.log(`Staging ${processedData.length} items in ${chunks.length} chunks`);
+
+		// Stage each chunk separately
+		for (let i = 0; i < chunks.length; i++) {
+			const chunk = chunks[i];
+			const stageRequest = new Request('http://localhost/stage', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					operation: 'fetch_and_stage',
+					data: chunk,
+					metadata: {
+						source: 'uniprot_mcp',
+						timestamp: new Date().toISOString(),
+						entity_count: chunk.length,
+						chunk_info: `${i + 1}/${chunks.length}`,
+						operation_name: operationName
+					}
+				})
+			});
+
+			const response = await doInstance.fetch(stageRequest);
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw new Error(`Failed to stage chunk ${i + 1}/${chunks.length}: ${response.statusText} - ${errorText}`);
+			}
+
+			console.log(`Successfully staged chunk ${i + 1}/${chunks.length}`);
 		}
 
 		return dataAccessId;
+	}
+
+	private async stageData(processedData: any[]): Promise<string> {
+		// Legacy method - now calls chunked version
+		return this.stageDataInChunks(processedData, 'legacy_operation');
 	}
 
 
@@ -287,4 +310,6 @@ export default {
 	},
 };
 
-export { JsonToSqlDO };
+export { JsonToSqlStorageDO };
+// Maintain compatibility with existing deployments
+export { JsonToSqlStorageDO as JsonToSqlDO };

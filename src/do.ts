@@ -1,8 +1,8 @@
-export class JsonToSqlDO {
-	private sql: SqlStorage;
+export class JsonToSqlStorageDO {
+	private ctx: DurableObjectState;
 
 	constructor(ctx: DurableObjectState, _env: Env) {
-		this.sql = ctx.storage.sql;
+		this.ctx = ctx;
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -57,7 +57,7 @@ export class JsonToSqlDO {
 					created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 				)
 			`;
-			this.sql.exec(createTableSQL);
+			this.ctx.storage.sql.exec(createTableSQL);
 			console.log('Table created successfully');
 
 			// Insert data one by one with better error handling 
@@ -75,7 +75,7 @@ export class JsonToSqlDO {
 						truncatedData = dataStr.substring(0, 10000) + '...[truncated]';
 					}
 					
-					this.sql.exec(insertSQL, truncatedData, item.type || 'protein');
+					this.ctx.storage.sql.exec(insertSQL, truncatedData, item.type || 'protein');
 					successCount++;
 					
 					if (i % 100 === 0) {
@@ -128,13 +128,13 @@ export class JsonToSqlDO {
 				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 			)
 		`;
-		this.sql.exec(metadataSQL);
+		this.ctx.storage.sql.exec(metadataSQL);
 		
 		const insertMetadataSQL = `
 			INSERT OR REPLACE INTO _metadata (key, value) 
 			VALUES (?, ?), (?, ?), (?, ?), (?, ?)
 		`;
-		this.sql.exec(insertMetadataSQL, 
+		this.ctx.storage.sql.exec(insertMetadataSQL, 
 			'entity_count', entityCount.toString(),
 			'source', metadata?.source || 'unknown',
 			'timestamp', metadata?.timestamp || new Date().toISOString(),
@@ -158,7 +158,7 @@ export class JsonToSqlDO {
 
 		try {
 			// Execute the query
-			const result = this.sql.exec(querySQL);
+			const result = this.ctx.storage.sql.exec(querySQL);
 			
 			// Convert result to array format
 			const rows: any[] = [];
@@ -186,7 +186,7 @@ export class JsonToSqlDO {
 
 	private async handleGetSchema(_body: any): Promise<Response> {
 		try {
-			const metadataResult = this.sql.exec("SELECT key, value FROM _metadata");
+			const metadataResult = this.ctx.storage.sql.exec("SELECT key, value FROM _metadata");
 			const metadata: Record<string, string> = {};
 			
 			for (const row of metadataResult) {
@@ -223,8 +223,8 @@ export class JsonToSqlDO {
 	private async handleCleanup(_body: any): Promise<Response> {
 		try {
 			// Drop main tables
-			this.sql.exec("DROP TABLE IF EXISTS protein");
-			this.sql.exec("DROP TABLE IF EXISTS _metadata");
+			this.ctx.storage.sql.exec("DROP TABLE IF EXISTS protein");
+			this.ctx.storage.sql.exec("DROP TABLE IF EXISTS _metadata");
 
 			return new Response(JSON.stringify({
 				success: true,
