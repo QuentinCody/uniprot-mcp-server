@@ -67,12 +67,28 @@ export class JsonToSqlStorageDO {
 			for (let i = 0; i < data.length; i++) {
 				try {
 					const item = data[i];
-					const dataStr = JSON.stringify(item.data || item);
+					const itemData = item.data || item;
 					
-					// Limit individual record size aggressively
-					let truncatedData = dataStr;
-					if (dataStr.length > 10000) { // Much smaller limit
-						truncatedData = dataStr.substring(0, 10000) + '...[truncated]';
+					// Ensure we have valid JSON by properly truncating large objects
+					let truncatedData: string;
+					try {
+						// First try to stringify the full object
+						const fullDataStr = JSON.stringify(itemData);
+						
+						if (fullDataStr.length > 50000) { // Larger limit but still manageable
+							// If too large, create a truncated but valid JSON object
+							const truncatedObject = this.createTruncatedValidJson(itemData);
+							truncatedData = JSON.stringify(truncatedObject);
+						} else {
+							truncatedData = fullDataStr;
+						}
+					} catch {
+						// If JSON.stringify fails, create a simple valid JSON object
+						truncatedData = JSON.stringify({
+							error: "Failed to serialize original data",
+							original_type: typeof itemData,
+							truncated: true
+						});
 					}
 					
 					this.ctx.storage.sql.exec(insertSQL, truncatedData, item.type || 'protein');
@@ -119,6 +135,44 @@ export class JsonToSqlStorageDO {
 		}
 	}
 
+
+	private createTruncatedValidJson(obj: any, maxFields: number = 20): any {
+		if (typeof obj !== 'object' || obj === null) {
+			return obj;
+		}
+
+		if (Array.isArray(obj)) {
+			// For arrays, keep first few items
+			const truncatedArray = obj.slice(0, Math.min(maxFields, obj.length));
+			if (obj.length > maxFields) {
+				truncatedArray.push(`... ${obj.length - maxFields} more items truncated`);
+			}
+			return truncatedArray;
+		}
+
+		// For objects, keep essential fields and truncate long strings
+		const truncatedObj: any = {};
+		let fieldCount = 0;
+		
+		for (const [key, value] of Object.entries(obj)) {
+			if (fieldCount >= maxFields) {
+				truncatedObj[`_truncated_fields`] = `... ${Object.keys(obj).length - maxFields} more fields`;
+				break;
+			}
+			
+			if (typeof value === 'string' && value.length > 1000) {
+				truncatedObj[key] = value.substring(0, 1000) + '... [string truncated]';
+			} else if (typeof value === 'object' && value !== null) {
+				// Recursively truncate nested objects (but limit depth)
+				truncatedObj[key] = this.createTruncatedValidJson(value, 10);
+			} else {
+				truncatedObj[key] = value;
+			}
+			fieldCount++;
+		}
+		
+		return truncatedObj;
+	}
 
 	private storeMetadataSync(metadata: any, entityCount: number): void {
 		const metadataSQL = `
