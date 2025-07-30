@@ -8,20 +8,30 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2025-03-10",
 	"compatibility_flags": ["nodejs_compat"],
-	"migrations": [
-		{
-			"new_sqlite_classes": ["MyMCP"],
-			"tag": "v1"
-		}
-	],
+	"dev": {
+		"port": 8787
+	},
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "MyMCP",
+				"class_name": "UniProtMCP",
 				"name": "MCP_OBJECT"
+			},
+			{
+				"name": "JSON_TO_SQL_DO",
+				"class_name": "JsonToSqlDO"
 			}
 		]
 	},
+	"migrations": [
+		{
+			"tag": "v1-initial-migration",
+			"new_sqlite_classes": [
+				"UniProtMCP",
+				"JsonToSqlDO"
+			]
+		}
+	],
 	"observability": {
 		"enabled": true
 	}
