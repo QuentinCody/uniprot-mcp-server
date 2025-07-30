@@ -81,6 +81,8 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 		// CRITICAL: Always stage responses over 20KB to prevent token limit issues
 		if (payloadSize > 20480) { // 20KB threshold - hard limit
 			const processedData = this.convertToStagingFormat(data, operationName);
+			
+			// Try primary staging with enhanced error handling
 			try {
 				const dataAccessId = await this.stageData(processedData);
 				return { 
@@ -107,8 +109,8 @@ sql: "SELECT * FROM protein LIMIT 10"
 **Reason for staging:** Response size (${Math.round(payloadSize / 1024)}KB) exceeds 20KB limit to prevent context overflow`
 				};
 			} catch (error) {
-				console.error('Failed to stage large data:', error);
-				throw new Error(`Response too large (${Math.round(payloadSize / 1024)}KB) and staging failed. Cannot return directly to prevent context overflow.`);
+				console.error('Primary staging failed:', error);
+				throw new Error(`Response too large (${Math.round(payloadSize / 1024)}KB) and staging failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
 
@@ -240,6 +242,7 @@ sql: "SELECT * FROM protein LIMIT 10"
 
 		return dataAccessId;
 	}
+
 
 	shouldBypassStaging(entities: any[], payloadSize: number): { bypass: boolean; reason: string } {
 		const entityCount = entities.length;

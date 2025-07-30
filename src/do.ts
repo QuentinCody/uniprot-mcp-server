@@ -45,30 +45,82 @@ export class JsonToSqlDO {
 			});
 		}
 
-		// Create a simple protein table for staging
-		const createTableSQL = `
-			CREATE TABLE IF NOT EXISTS protein (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				data TEXT,
-				type TEXT,
-				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-			)
-		`;
-		this.sql.exec(createTableSQL);
+		// Create tables with better error handling for large datasets
+		try {
+			console.log(`Starting to stage ${data.length} items`);
+			
+			const createTableSQL = `
+				CREATE TABLE IF NOT EXISTS protein (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					data TEXT,
+					type TEXT,
+					created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+				)
+			`;
+			this.sql.exec(createTableSQL);
+			console.log('Table created successfully');
 
-		// Insert data in chunks
-		for (let i = 0; i < data.length; i += 100) {
-			const chunk = data.slice(i, i + 100);
-			for (const item of chunk) {
-				const insertSQL = `
-					INSERT INTO protein (data, type) 
-					VALUES (?, ?)
-				`;
-				this.sql.exec(insertSQL, JSON.stringify(item.data || item), item.type || 'protein');
+			// Insert data one by one with better error handling 
+			const insertSQL = `INSERT INTO protein (data, type) VALUES (?, ?)`;
+			let successCount = 0;
+			
+			for (let i = 0; i < data.length; i++) {
+				try {
+					const item = data[i];
+					const dataStr = JSON.stringify(item.data || item);
+					
+					// Limit individual record size aggressively
+					let truncatedData = dataStr;
+					if (dataStr.length > 10000) { // Much smaller limit
+						truncatedData = dataStr.substring(0, 10000) + '...[truncated]';
+					}
+					
+					this.sql.exec(insertSQL, truncatedData, item.type || 'protein');
+					successCount++;
+					
+					if (i % 100 === 0) {
+						console.log(`Processed ${i}/${data.length} items`);
+					}
+				} catch (itemError) {
+					console.error(`Failed to insert item ${i}:`, itemError);
+					// Continue with next item rather than failing entirely
+				}
 			}
-		}
 
-		// Store metadata
+			console.log(`Successfully inserted ${successCount}/${data.length} items`);
+
+			// Store metadata without async call
+			try {
+				this.storeMetadataSync(metadata, successCount);
+				console.log('Metadata stored successfully');
+			} catch (metaError) {
+				console.error('Failed to store metadata:', metaError);
+				// Don't fail the entire operation for metadata issues
+			}
+
+			return new Response(JSON.stringify({ 
+				success: true, 
+				tables_created: ['protein'],
+				entities_inserted: successCount,
+				total_attempted: data.length
+			}), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+			
+		} catch (error) {
+			console.error('Failed to stage data:', error);
+			return new Response(JSON.stringify({ 
+				error: `Failed to stage data: ${error instanceof Error ? error.message : String(error)}`,
+				stack: error instanceof Error ? error.stack : undefined
+			}), {
+				status: 500,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+	}
+
+
+	private storeMetadataSync(metadata: any, entityCount: number): void {
 		const metadataSQL = `
 			CREATE TABLE IF NOT EXISTS _metadata (
 				key TEXT PRIMARY KEY,
@@ -83,19 +135,15 @@ export class JsonToSqlDO {
 			VALUES (?, ?), (?, ?), (?, ?), (?, ?)
 		`;
 		this.sql.exec(insertMetadataSQL, 
-			'entity_count', data.length.toString(),
+			'entity_count', entityCount.toString(),
 			'source', metadata?.source || 'unknown',
 			'timestamp', metadata?.timestamp || new Date().toISOString(),
 			'status', 'staged'
 		);
+	}
 
-		return new Response(JSON.stringify({ 
-			success: true, 
-			tables_created: ['protein'],
-			entities_inserted: data.length
-		}), {
-			headers: { 'Content-Type': 'application/json' }
-		});
+	private async storeMetadata(metadata: any, entityCount: number): Promise<void> {
+		this.storeMetadataSync(metadata, entityCount);
 	}
 
 	private async handleQuery(body: any): Promise<Response> {

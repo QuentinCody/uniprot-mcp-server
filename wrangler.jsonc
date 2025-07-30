@@ -25,12 +25,10 @@
 	},
 	"migrations": [
 		{
-			"tag": "v7-rename-mcp-only",
-			"renamed_classes": [
-				{
-					"from": "MyMCP",
-					"to": "UniProtMCP"
-				}
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"UniProtMCP",
+				"JsonToSqlDO"
 			]
 		}
 	],
