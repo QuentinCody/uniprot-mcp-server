@@ -25,11 +25,12 @@
 	},
 	"migrations": [
 		{
-			"tag": "v1",
-			"new_sqlite_classes": [
-				"UniProtMCP",
-				"JsonToSqlDO"
-			]
+			"tag": "v7-rename-mcp-only",
+			"new_sqlite_classes": []
+		},
+		{
+			"tag": "v8-fix-production-deployment",
+			"new_sqlite_classes": []
 		}
 	],
 	"observability": {
