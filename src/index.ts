@@ -44,7 +44,10 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 			}
 			
 			const errorMessage = errorJson.messages?.join('; ') || errorText;
-			throw new Error(`${toolName} request failed: ${response.status} ${response.statusText}. Response: ${errorMessage}`);
+			const error = new Error(`${toolName} request failed: ${response.status} ${response.statusText}. Response: ${errorMessage}`);
+			// Attach status code for enhanced error handling
+			(error as any).status = response.status;
+			throw error;
 		}
 
 		// Check if response is compressed
@@ -85,28 +88,16 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 			// Try primary staging with enhanced error handling and chunking
 			try {
 				const dataAccessId = await this.stageDataInChunks(processedData, operationName);
+				
+				// Generate enhanced staging response with auto-schema preview
+				const stagingResponse = await this.generateEnhancedStagingResponse(
+					dataAccessId, operationName, payloadSize, processedData
+				);
+				
 				return { 
 					shouldStage: true, 
 					dataAccessId,
-					formattedData: `✅ **Large Dataset Automatically Staged**
-
-📊 **Data Summary:**
-- **Operation:** ${operationName}
-- **Payload Size:** ${Math.round(payloadSize / 1024)}KB
-- **Entities:** ${processedData.length}
-- **Data Access ID:** ${dataAccessId}
-
-🔍 **Next Steps:**
-Use the \`data_manager\` tool with operation "query" and this data_access_id to run SQL queries on your staged data.
-
-**Example:**
-\`\`\`
-operation: "query"
-data_access_id: "${dataAccessId}"
-sql: "SELECT * FROM protein LIMIT 10"
-\`\`\`
-
-**Reason for staging:** Response size (${Math.round(payloadSize / 1024)}KB) exceeds 20KB limit to prevent context overflow`
+					formattedData: stagingResponse
 				};
 			} catch (error) {
 				console.error('Primary staging failed:', error);
@@ -134,10 +125,40 @@ sql: "SELECT * FROM protein LIMIT 10"
 		// Stage the data
 		try {
 			const dataAccessId = await this.stageData(processedData);
+			
+			// Generate enhanced staging response with auto-schema preview
+			const stagingResponse = await this.generateEnhancedStagingResponse(
+				dataAccessId, operationName, payloadSize, processedData, stagingDecision.reason
+			);
+			
 			return { 
 				shouldStage: true, 
 				dataAccessId,
-				formattedData: `✅ **Large Dataset Automatically Staged**
+				formattedData: stagingResponse
+			};
+		} catch (error) {
+			// Fallback to direct return if staging fails
+			console.error('Failed to stage data:', error);
+			return { shouldStage: false, formattedData: this.formatResponseData(data) };
+		}
+	}
+
+	private async generateEnhancedStagingResponse(
+		dataAccessId: string, 
+		operationName: string, 
+		payloadSize: number, 
+		processedData: any[], 
+		reason?: string
+	): Promise<string> {
+		// Determine data type for better user guidance
+		const dataType = this.inferDataType(operationName, processedData);
+		const dataTypeIcon = this.getDataTypeIcon(dataType);
+		
+		// Generate sample JSON paths from first record
+		const samplePaths = this.generateSampleJsonPaths(processedData);
+		
+		// Create enhanced staging response
+		let response = `✅ **${dataTypeIcon} ${dataType} Data Staged**
 
 📊 **Data Summary:**
 - **Operation:** ${operationName}
@@ -155,13 +176,155 @@ data_access_id: "${dataAccessId}"
 sql: "SELECT * FROM protein LIMIT 10"
 \`\`\`
 
-**Reason for staging:** ${stagingDecision.reason}`
-			};
-		} catch (error) {
-			// Fallback to direct return if staging fails
-			console.error('Failed to stage data:', error);
-			return { shouldStage: false, formattedData: this.formatResponseData(data) };
+**Reason for staging:** ${reason || `Response size (${Math.round(payloadSize / 1024)}KB) exceeds 20KB limit to prevent context overflow`}`;
+
+		// Add sample JSON paths if available
+		if (samplePaths.length > 0) {
+			response += `\n\n📋 **Common JSON Extraction Patterns:**\n`;
+			for (const path of samplePaths) {
+				response += `- ${path.label}: \`json_extract(data, '${path.path}')\`\n`;
+			}
+			
+			response += `\n💡 **Quick Query Template:**
+\`\`\`sql
+SELECT 
+  ${samplePaths.slice(0, 3).map(p => `json_extract(data, '${p.path}') as ${p.label.toLowerCase().replace(/\s+/g, '_')}`).join(',\n  ')}
+FROM protein 
+LIMIT 10;
+\`\`\``;
 		}
+
+		// Add feature-specific guidance for variation/feature data  
+		if (operationName.includes('variation') || operationName.includes('feature')) {
+			response += `\n\n🏷️ **Feature/Variation Query Helpers:**
+\`\`\`sql
+-- Get distinct feature types
+SELECT DISTINCT json_extract(data, '$.type') as feature_type, COUNT(*) as count
+FROM protein GROUP BY feature_type;
+
+-- Filter by specific feature type  
+SELECT * FROM protein 
+WHERE json_extract(data, '$.type') = 'DOMAIN'
+LIMIT 10;
+
+-- Range queries for positions
+SELECT * FROM protein 
+WHERE CAST(json_extract(data, '$.begin') AS INTEGER) BETWEEN 100 AND 200;
+\`\`\``;
+		}
+
+		// Add data exploration helpers
+		response += `\n\n🔧 **Data Exploration:**
+\`\`\`sql
+-- Schema discovery
+SELECT json_keys(data) FROM protein LIMIT 1;
+
+-- Sample data structure  
+SELECT json_extract(data, '$') FROM protein LIMIT 3;
+
+-- Count total records
+SELECT COUNT(*) as total_records FROM protein;
+\`\`\``;
+
+		// Add common SQLite JSON gotchas
+		response += `\n\n⚠️ **SQLite JSON Path Notes:**
+- Use simple paths: \`'$.field'\` not JSONPath filters
+- Array access: \`'$.array[0]'\` (zero-indexed)
+- For complex filtering, use WHERE clauses
+- CAST() for numeric comparisons: \`CAST(json_extract(data, '$.begin') AS INTEGER)\``;
+		
+
+		return response;
+	}
+
+	private inferDataType(operationName: string, processedData: any[]): string {
+		const operation = operationName.toLowerCase();
+		
+		if (operation.includes('search') || operation.includes('stream')) {
+			return 'Protein Search Results';
+		} else if (operation.includes('entry')) {
+			return 'Protein Entry Data';
+		} else if (operation.includes('variation')) {
+			return 'Protein Variation Data';
+		} else if (operation.includes('feature')) {
+			return 'Protein Feature Annotations';
+		} else if (operation.includes('proteomics')) {
+			return 'Proteomics Evidence';
+		} else if (operation.includes('blast')) {
+			return 'BLAST Search Results';
+		} else if (operation.includes('mapping')) {
+			return 'ID Mapping Results';
+		}
+		
+		// Try to infer from data structure
+		if (processedData.length > 0) {
+			const firstItem = processedData[0];
+			if (firstItem.type === 'protein') return 'Protein Data';
+			if (firstItem.type === 'feature') return 'Feature Annotations';
+			if (firstItem.type === 'variant') return 'Variation Data';
+		}
+		
+		return 'Dataset';
+	}
+
+	private getDataTypeIcon(dataType: string): string {
+		const type = dataType.toLowerCase();
+		if (type.includes('protein') && type.includes('search')) return '🔍';
+		if (type.includes('protein') && type.includes('entry')) return '📄';
+		if (type.includes('variation')) return '🧬';
+		if (type.includes('feature')) return '🏷️';
+		if (type.includes('proteomics')) return '🧪';
+		if (type.includes('blast')) return '🎯';
+		if (type.includes('mapping')) return '🔗';
+		return '📊';
+	}
+
+	private generateSampleJsonPaths(processedData: any[]): Array<{label: string, path: string}> {
+		if (processedData.length === 0) return [];
+		
+		const sampleData = processedData[0].data;
+		const paths: Array<{label: string, path: string}> = [];
+		
+		// Common UniProt fields
+		if (sampleData.primaryAccession) {
+			paths.push({ label: 'Accession', path: '$.primaryAccession' });
+		}
+		if (sampleData.genes && sampleData.genes[0] && sampleData.genes[0].geneName) {
+			paths.push({ label: 'Gene Name', path: '$.genes[0].geneName.value' });
+		}
+		if (sampleData.proteinDescription && sampleData.proteinDescription.recommendedName) {
+			paths.push({ label: 'Protein Name', path: '$.proteinDescription.recommendedName.fullName.value' });
+		}
+		if (sampleData.sequence) {
+			paths.push({ label: 'Sequence Length', path: '$.sequence.length' });
+			if (sampleData.sequence.value) {
+				paths.push({ label: 'Sequence', path: '$.sequence.value' });
+			}
+		}
+		if (sampleData.organism && sampleData.organism.scientificName) {
+			paths.push({ label: 'Organism', path: '$.organism.scientificName' });
+		}
+		
+		// Variation-specific fields
+		if (sampleData.wildType) {
+			paths.push({ label: 'Wild Type', path: '$.wildType' });
+		}
+		if (sampleData.alternativeSequence) {
+			paths.push({ label: 'Variant', path: '$.alternativeSequence' });
+		}
+		if (sampleData.begin) {
+			paths.push({ label: 'Position', path: '$.begin' });
+		}
+		
+		// Feature-specific fields
+		if (sampleData.type) {
+			paths.push({ label: 'Feature Type', path: '$.type' });
+		}
+		if (sampleData.description) {
+			paths.push({ label: 'Description', path: '$.description' });
+		}
+		
+		return paths.slice(0, 6); // Limit to 6 most useful paths
 	}
 
 	private convertToStagingFormat(data: any, operationName: string): any[] {

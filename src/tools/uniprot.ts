@@ -1,6 +1,74 @@
 import { z } from "zod";
 import { BaseTool } from "./base.js";
 
+// Shared validation utility for UniProt tools
+class UniProtValidator {
+	static validateSearchParams(query: string, fields?: string): string | null {
+		const issues: string[] = [];
+		
+		// Common field mistakes in search queries - check for exact matches with word boundaries
+		const fieldMistakes = [
+			{ pattern: /\bgene_names:/g, correct: 'gene:' },
+			{ pattern: /\bgene_name:/g, correct: 'gene:' },
+			{ pattern: /\bname:/g, correct: 'protein_name:' },
+			{ pattern: /\bspecies:/g, correct: 'organism_name: or organism_id:' },
+			{ pattern: /\bfunction:/g, correct: 'cc_function:' }
+		];
+		
+		for (const mistake of fieldMistakes) {
+			if (mistake.pattern.test(query)) {
+				const wrongField = mistake.pattern.source.replace(/\\b/g, '').replace(/:/g, ':');
+				issues.push(`• Replace "${wrongField}" with "${mistake.correct}"`);
+			}
+		}
+		
+		// Valid UniProt search fields
+		const validSearchFields = [
+			'accession', 'gene', 'protein_name', 'organism_name', 'organism_id',
+			'cc_function', 'cc_subcellular_location', 'keyword', 'go', 'ec',
+			'pathway', 'reviewed', 'protein_existence', 'length', 'mass',
+			'taxonomy', 'ft_peptide', 'sequence'
+		];
+		
+		// Validate fields parameter if provided
+		if (fields) {
+			const requestedFields = fields.split(',').map(f => f.trim());
+			const validReturnFields = [
+				'accession', 'gene_names', 'protein_name', 'length', 'mass',
+				'organism_name', 'cc_function', 'cc_subcellular_location',
+				'ft_peptide', 'sequence', 'reviewed', 'protein_existence',
+				'organism_id', 'taxonomy', 'keyword', 'go', 'ec', 'pathway'
+			];
+			
+			const invalidFields = requestedFields.filter(f => !validReturnFields.includes(f));
+			if (invalidFields.length > 0) {
+				issues.push(`• Invalid fields: ${invalidFields.join(', ')}`);
+				issues.push(`• Valid fields: ${validReturnFields.join(', ')}`);
+			}
+		}
+		
+		if (issues.length > 0) {
+			return `**UniProt Search Field Validation Issues:**
+
+${issues.join('\n')}
+
+**Common Query Patterns:**
+\`\`\`
+• Basic: organism_id:9606 AND reviewed:true
+• Gene search: gene:BRCA1 AND organism_id:9606
+• Function: cc_function:"DNA repair" AND reviewed:true
+• Complex: gene:BRCA* AND organism_id:9606 AND length:[100 TO 500]
+\`\`\`
+
+**Field Reference:**
+- **Search fields**: gene, organism_id, cc_function, keyword, reviewed, length
+- **Return fields**: accession, gene_names, protein_name, cc_function, sequence`;
+		}
+		
+		return null;
+	}
+}
+
 export class UniProtSearchTool extends BaseTool {
 	register(): void {
 		this.context.server.tool(
@@ -20,7 +88,14 @@ export class UniProtSearchTool extends BaseTool {
 				try {
 					return await this.handleSearch(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `UniProt Search Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'UniProt Search',
+						'search',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -28,6 +103,12 @@ export class UniProtSearchTool extends BaseTool {
 
 	private async handleSearch(params: any) {
 		const { query, format, fields, size, sort, facets, compressed, include_isoforms } = params;
+		
+		// Pre-validate query and fields to provide better error messages
+		const validationError = UniProtValidator.validateSearchParams(query, fields);
+		if (validationError) {
+			return { content: [{ type: "text" as const, text: validationError }] };
+		}
 		
 		const searchParams = new URLSearchParams({
 			query: query,
@@ -97,7 +178,14 @@ export class UniProtStreamTool extends BaseTool {
 				try {
 					return await this.handleStream(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `UniProt Stream Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'UniProt Stream',
+						'stream',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -105,6 +193,12 @@ export class UniProtStreamTool extends BaseTool {
 
 	private async handleStream(params: any) {
 		const { query, format, fields, compressed, include_isoforms } = params;
+		
+		// Pre-validate query and fields to provide better error messages
+		const validationError = UniProtValidator.validateSearchParams(query, fields);
+		if (validationError) {
+			return { content: [{ type: "text" as const, text: validationError }] };
+		}
 		
 		const searchParams = new URLSearchParams({
 			query: query,
@@ -156,7 +250,14 @@ export class UniProtEntryTool extends BaseTool {
 				try {
 					return await this.handleEntry(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `UniProt Entry Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'UniProt Entry',
+						'entry',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -218,7 +319,14 @@ export class UniProtIDMappingTool extends BaseTool {
 				try {
 					return await this.handleIDMapping(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `UniProt ID Mapping Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'UniProt ID Mapping',
+						'id_mapping',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -360,7 +468,14 @@ export class UniProtBLASTTool extends BaseTool {
 				try {
 					return await this.handleBLAST(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `UniProt BLAST Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'UniProt BLAST',
+						'blast',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -385,7 +500,9 @@ export class UniProtBLASTTool extends BaseTool {
 		});
 
 		if (!submitResponse.ok) {
-			throw new Error(`Failed to submit BLAST job: ${submitResponse.status} ${submitResponse.statusText}`);
+			const error = new Error(`Failed to submit BLAST job: ${submitResponse.status} ${submitResponse.statusText}`);
+			(error as any).status = submitResponse.status;
+			throw error;
 		}
 
 		const submitResult = await submitResponse.json() as { jobId: string };

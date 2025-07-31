@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BaseTool } from "./base.js";
+import { StagingGuideFormatter } from "../lib/response-formatter.js";
 
 export class DataManagerTool extends BaseTool {
 	register(): void {
@@ -25,7 +26,13 @@ export class DataManagerTool extends BaseTool {
 				try {
 					return await this.handleDataManagement(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `Data Manager Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'Data Manager',
+						params.operation || 'unknown',
+						params
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -123,7 +130,7 @@ export class DataManagerTool extends BaseTool {
 			throw new Error(`Schema retrieval failed: ${result.error}`);
 		}
 
-		const schemaText = `**Dataset Schema** for \`${dataAccessId}\`:\n\n${JSON.stringify(result.schema, null, 2)}`;
+		const schemaText = StagingGuideFormatter.formatSchemaWithGuide(result.schema, dataAccessId);
 		
 		return {
 			content: [{ type: "text" as const, text: schemaText }]

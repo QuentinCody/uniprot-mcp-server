@@ -15,7 +15,14 @@ export class ProteinsAPIDetailsTool extends BaseTool {
 				try {
 					return await this.handleProteinDetails(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `Proteins API Details Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'Proteins API Details',
+						'details',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -83,7 +90,14 @@ export class ProteinsAPIFeaturesTool extends BaseTool {
 				try {
 					return await this.handleProteinFeatures(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `Proteins API Features Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'Proteins API Features',
+						'features',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
