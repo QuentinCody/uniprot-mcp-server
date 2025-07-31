@@ -34,7 +34,7 @@
 		},
 		{
 			"tag": "v9-enable-sqlite-storage",
-			"new_sqlite_classes": ["JsonToSqlStorageDO"]
+			"new_sqlite_classes": ["JsonToSqlStorageDO", "UniProtMCP"]
 		}
 	],
 	"observability": {
