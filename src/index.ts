@@ -18,6 +18,7 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 	proteinsApiBaseUrl = "https://www.ebi.ac.uk/proteins/api";
 
 	private workerEnv: Env | undefined;
+	private datasetRegistry: Array<{ id: string; operation: string; entityCount: number; entityTypes: string[]; payloadSize: number; timestamp: string }> = [];
 
 	constructor(ctx?: any, env?: Env) {
 		super(ctx, env);
@@ -50,13 +51,7 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 			throw error;
 		}
 
-		// Check if response is compressed
-		const contentEncoding = response.headers.get("content-encoding");
-		if (contentEncoding && (contentEncoding.includes("gzip") || contentEncoding.includes("deflate"))) {
-			// Browser automatically handles decompression, but if we get here with raw compressed data, 
-			// it means decompression failed - return error instead of trying to parse
-			throw new Error(`${toolName} received compressed response that could not be decompressed. Try disabling compression.`);
-		}
+		// Workers transparently handle gzip/deflate; do not treat content-encoding as an error
 
 		const contentType = response.headers.get("content-type");
 		if (contentType && contentType.includes("application/json")) {
@@ -88,6 +83,16 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 			// Try primary staging with enhanced error handling and chunking
 			try {
 				const dataAccessId = await this.stageDataInChunks(processedData, operationName);
+
+				// Register dataset metadata for discovery
+				this.registerDataset({
+					id: dataAccessId,
+					operation: operationName,
+					entityCount: processedData.length,
+					entityTypes: Array.from(new Set(processedData.map(e => e.type))),
+					payloadSize,
+					timestamp: new Date().toISOString()
+				});
 				
 				// Generate enhanced staging response with auto-schema preview
 				const stagingResponse = await this.generateEnhancedStagingResponse(
@@ -124,7 +129,17 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 
 		// Stage the data
 		try {
-			const dataAccessId = await this.stageData(processedData);
+			const dataAccessId = await this.stageData(processedData, operationName);
+
+			// Register dataset metadata for discovery
+			this.registerDataset({
+				id: dataAccessId,
+				operation: operationName,
+				entityCount: processedData.length,
+				entityTypes: Array.from(new Set(processedData.map(e => e.type))),
+				payloadSize,
+				timestamp: new Date().toISOString()
+			});
 			
 			// Generate enhanced staging response with auto-schema preview
 			const stagingResponse = await this.generateEnhancedStagingResponse(
@@ -141,6 +156,17 @@ export class UniProtMCP extends McpAgent implements ToolContext {
 			console.error('Failed to stage data:', error);
 			return { shouldStage: false, formattedData: this.formatResponseData(data) };
 		}
+	}
+
+	// Dataset registry API
+	registerDataset(meta: { id: string; operation: string; entityCount: number; entityTypes: string[]; payloadSize: number; timestamp: string }): void {
+		// Keep the registry small by capping history to latest 50 datasets
+		this.datasetRegistry.unshift(meta);
+		if (this.datasetRegistry.length > 50) this.datasetRegistry.pop();
+	}
+
+	listDatasets(): Array<{ id: string; operation: string; entityCount: number; entityTypes: string[]; payloadSize: number; timestamp: string }> {
+		return [...this.datasetRegistry];
 	}
 
 	private async generateEnhancedStagingResponse(
@@ -216,10 +242,7 @@ WHERE CAST(json_extract(data, '$.begin') AS INTEGER) BETWEEN 100 AND 200;
 		// Add data exploration helpers
 		response += `\n\n🔧 **Data Exploration:**
 \`\`\`sql
--- Schema discovery
-SELECT json_keys(data) FROM protein LIMIT 1;
-
--- Sample data structure  
+-- Sample data structure
 SELECT json_extract(data, '$') FROM protein LIMIT 3;
 
 -- Count total records
@@ -360,11 +383,35 @@ SELECT COUNT(*) as total_records FROM protein;
 				}));
 			}
 
-			// Single protein object
-			return [{
-				type: 'protein',
-				data: { ...data, _index: 0 }
-			}];
+			// Single object fallback; if very large, try splitting by largest array property
+			try {
+				const jsonStr = JSON.stringify(data);
+				if (jsonStr.length > 1_000_000) { // ~1MB
+					let largestKey: string | null = null;
+					let largestArr: any[] | null = null;
+					for (const [k, v] of Object.entries(data)) {
+						if (Array.isArray(v) && v.length > 0) {
+							if (!largestArr || v.length > largestArr.length) {
+								largestArr = v;
+								largestKey = k;
+							}
+						}
+					}
+					if (largestArr && largestKey) {
+						const parentMeta: any = {};
+						if ((data as any).accession) parentMeta._accession = (data as any).accession;
+						return largestArr.map((elem: any, index: number) => ({
+							type: `${operationName.replace(/[^a-zA-Z0-9]/g, '_')}_${largestKey}`.slice(0, 60),
+							data: { ...elem, _index: index, _parent_key: largestKey, ...parentMeta }
+						}));
+					}
+				}
+			} catch {
+				// fall through to single row
+			}
+
+			// Single object as a single row
+			return [{ type: 'protein', data: { ...data, _index: 0 } }];
 		}
 
 		// Fallback for other formats
@@ -374,13 +421,14 @@ SELECT COUNT(*) as total_records FROM protein;
 		}];
 	}
 
-	private async stageDataInChunks(processedData: any[], operationName: string): Promise<string> {
+	public async stageDataInChunks(processedData: any[], operationName: string): Promise<string> {
 		const env = this.getEnvironment();
 		if (!env) {
 			throw new Error('Environment not available for staging');
 		}
 
-		const dataAccessId = `uniprot_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+		const normalizedOp = operationName.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40) || 'op';
+		const dataAccessId = `${normalizedOp}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 		const doId = env.JSON_TO_SQL_DO.idFromName(dataAccessId);
 		const doInstance = env.JSON_TO_SQL_DO.get(doId);
 		
@@ -391,7 +439,7 @@ SELECT COUNT(*) as total_records FROM protein;
 			chunks.push(processedData.slice(i, i + chunkSize));
 		}
 
-		console.log(`Staging ${processedData.length} items in ${chunks.length} chunks`);
+		console.log(`Staging ${processedData.length} items in ${chunks.length} chunks (operation=${operationName}, id=${dataAccessId})`);
 
 		// Stage each chunk separately
 		for (let i = 0; i < chunks.length; i++) {
@@ -407,7 +455,8 @@ SELECT COUNT(*) as total_records FROM protein;
 						timestamp: new Date().toISOString(),
 						entity_count: chunk.length,
 						chunk_info: `${i + 1}/${chunks.length}`,
-						operation_name: operationName
+						operation_name: operationName,
+						data_access_id: dataAccessId
 					}
 				})
 			});
@@ -424,9 +473,8 @@ SELECT COUNT(*) as total_records FROM protein;
 		return dataAccessId;
 	}
 
-	private async stageData(processedData: any[]): Promise<string> {
-		// Legacy method - now calls chunked version
-		return this.stageDataInChunks(processedData, 'legacy_operation');
+	private async stageData(processedData: any[], operationName: string): Promise<string> {
+		return this.stageDataInChunks(processedData, operationName);
 	}
 
 

@@ -5,6 +5,7 @@ import { BaseTool } from "./base.js";
 class UniProtValidator {
 	static validateSearchParams(query: string, fields?: string): string | null {
 		const issues: string[] = [];
+		const aliasInfo: string[] = [];
 		
 		// Common field mistakes in search queries - check for exact matches with word boundaries
 		const fieldMistakes = [
@@ -39,11 +40,25 @@ class UniProtValidator {
 				'ft_peptide', 'sequence', 'reviewed', 'protein_existence',
 				'organism_id', 'taxonomy', 'keyword', 'go', 'ec', 'pathway'
 			];
+
+			// Common alias map for fields
+			const aliases: Record<string, string> = {
+				'id': 'accession',
+				'gene_primary': 'gene_names',
+				'genes(PREFERRED)': 'gene_names',
+				'gene': 'gene_names', // for return fields only
+			};
 			
-			const invalidFields = requestedFields.filter(f => !validReturnFields.includes(f));
+			// Normalize aliases eagerly
+			const normalized = requestedFields.map(f => aliases[f] ?? f);
+			const invalidFields = normalized.filter(f => !validReturnFields.includes(f));
 			if (invalidFields.length > 0) {
 				issues.push(`• Invalid fields: ${invalidFields.join(', ')}`);
 				issues.push(`• Valid fields: ${validReturnFields.join(', ')}`);
+				const corrected = normalized.filter(f => validReturnFields.includes(f));
+				if (corrected.length !== requestedFields.length) {
+					aliasInfo.push(`• Suggested corrected fields: ${corrected.join(', ')}`);
+				}
 			}
 		}
 		
@@ -51,6 +66,8 @@ class UniProtValidator {
 			return `**UniProt Search Field Validation Issues:**
 
 ${issues.join('\n')}
+
+${aliasInfo.length ? aliasInfo.join('\n') + '\n' : ''}
 
 **Common Query Patterns:**
 \`\`\`
@@ -140,7 +157,7 @@ export class UniProtSearchTool extends BaseTool {
 					  "text/plain"
 		};
 
-		const response = await fetch(url, { headers });
+        const response = await this.fetchWithRetry(url, { headers });
 		const data = await this.parseResponse(response, "UniProt Search");
 
 		// Check if response needs staging due to size
@@ -208,14 +225,15 @@ export class UniProtStreamTool extends BaseTool {
 		if (fields && (format === "json" || format === "tsv")) {
 			searchParams.append("fields", fields);
 		}
-		if (compressed) {
-			searchParams.append("compressed", "true");
-		}
+        // Use uncompressed JSON for parsing stability
+        if (format !== 'json' && compressed) {
+            searchParams.append("compressed", "true");
+        }
 		if (include_isoforms) {
 			searchParams.append("includeIsoform", "true");
 		}
 
-		const url = `https://rest.uniprot.org/uniprotkb/stream?${searchParams}`;
+        const url = `https://rest.uniprot.org/uniprotkb/stream?${searchParams}`;
 		const headers: Record<string, string> = {
 			"Accept": format === "json" ? "application/json" : 
 					  format === "xml" ? "application/xml" :
@@ -223,8 +241,8 @@ export class UniProtStreamTool extends BaseTool {
 					  "text/plain"
 		};
 
-		const response = await fetch(url, { headers });
-		const data = await this.parseResponse(response, "UniProt Stream");
+        const response = await this.fetchWithRetry(url, { headers });
+        const data = await this.parseResponse(response, "UniProt Stream");
 
 		// Stream responses are always large, so stage them
 		const stagingResult = await this.context.checkAndStageIfNeeded(data, `stream_${format}`);
@@ -265,6 +283,24 @@ export class UniProtEntryTool extends BaseTool {
 
 	private async handleEntry(params: any) {
 		const { accession, format, fields, include_isoforms } = params;
+
+		// Validate entry fields similarly to search to avoid 400s
+        if (fields && (format === 'json' || format === 'tsv')) {
+            const validReturnFields = [
+                'accession', 'gene_names', 'protein_name', 'length', 'mass',
+                'organism_name', 'cc_function', 'cc_subcellular_location',
+                'ft_peptide', 'sequence', 'reviewed', 'protein_existence',
+                'organism_id', 'taxonomy', 'keyword', 'go', 'ec', 'pathway'
+            ];
+            const aliases: Record<string, string> = { 'id': 'accession', 'gene_primary': 'gene_names', 'genes(PREFERRED)': 'gene_names', 'gene': 'gene_names' };
+            const requested: string[] = fields.split(',').map((f: string) => f.trim());
+            const normalized: string[] = requested.map((f: string) => aliases[f] ?? f);
+            const invalid: string[] = normalized.filter((f: string) => !validReturnFields.includes(f));
+            if (invalid.length > 0) {
+                const msg = `Invalid fields parameter value(s) ${invalid.map((f: string) => `'${f}'`).join(', ')}\nValid fields: ${validReturnFields.join(', ')}`;
+                return { content: [{ type: 'text' as const, text: `UniProt Entry Error: ${msg}` }] };
+            }
+        }
 		
 		const searchParams = new URLSearchParams({
 			format: format
@@ -285,7 +321,7 @@ export class UniProtEntryTool extends BaseTool {
 					  "text/plain"
 		};
 
-		const response = await fetch(url, { headers });
+        const response = await this.fetchWithRetry(url, { headers });
 		const data = await this.parseResponse(response, `UniProt Entry ${accession}`);
 
 		// Check if response needs staging due to size
@@ -337,6 +373,20 @@ export class UniProtIDMappingTool extends BaseTool {
 		
 		if (ids.length > 100000) {
 			throw new Error("Maximum 100,000 IDs allowed per mapping job");
+		}
+
+		// Pre-flight: validate supported mapping pairs to avoid common 400s
+		const supportedPairs: Array<[string, string]> = [
+			['UniProtKB_AC-ID', 'UniProtKB'], ['UniProtKB', 'UniProtKB_AC-ID'],
+			['Gene_Name', 'UniProtKB'], ['UniProtKB', 'Gene_Name'],
+			['UniParc', 'UniProtKB'], ['UniProtKB', 'UniParc'],
+			['PDB', 'UniProtKB'], ['UniProtKB', 'PDB'],
+			['EMBL-GenBank-DDBJ', 'UniProtKB'], ['UniProtKB', 'EMBL-GenBank-DDBJ']
+		];
+		const isSupported = supportedPairs.some(([f, t]) => f === from_db && t === to_db);
+		if (!isSupported) {
+			const suggestion = `Unsupported mapping pair: ${from_db} → ${to_db}. Try an intermediate hop via UniProtKB or use UniParc/UniRef. Examples:\n- ${from_db} → UniProtKB → ${to_db}\n- Use uniparc_entry for stable sequence UID, then map to UniProtKB.`;
+			throw new Error(suggestion);
 		}
 
 		// Submit mapping job - corrected approach
@@ -500,8 +550,14 @@ export class UniProtBLASTTool extends BaseTool {
 		});
 
 		if (!submitResponse.ok) {
-			const error = new Error(`Failed to submit BLAST job: ${submitResponse.status} ${submitResponse.statusText}`);
-			(error as any).status = submitResponse.status;
+			const status = submitResponse.status;
+			if (status === 405 || status === 403) {
+				// Graceful fallback guidance
+				const guidance = `BLAST is not available in this environment (HTTP ${status}). Try these alternatives:\n\n- UniRef clusters around your seed: use uniref_cluster with id derived from a known accession.\n- Exact/near-exact sequence search via uniprot_search with sequence:* (short peptides) or by accession context.\n- If you have an accession, use proteomics/features endpoints to find functional neighbors.\n\nInput length: ${sequence.length} aa/nt. Program: ${program}.`;
+				return { content: [{ type: 'text' as const, text: guidance }] };
+			}
+			const error = new Error(`Failed to submit BLAST job: ${status} ${submitResponse.statusText}`);
+			(error as any).status = status;
 			throw error;
 		}
 

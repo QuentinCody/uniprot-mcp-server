@@ -44,12 +44,12 @@ class UniProtMCPQuickStart {
         const payload = {
             method: 'tools/call',
             params: {
-                name: 'uniprot_query',
+                name: 'uniprot_search',
                 arguments: {
-                    operation: 'search',
                     query: 'organism_id:9606 AND reviewed:true',
+                    format: 'json',
                     fields: 'accession,protein_name,gene_names',
-                    limit: 5
+                    size: 5
                 }
             }
         };
@@ -71,10 +71,11 @@ class UniProtMCPQuickStart {
         const payload = {
             method: 'tools/call',
             params: {
-                name: 'uniprot_query',
+                name: 'uniprot_entry',
                 arguments: {
-                    operation: 'protein_details',
-                    accession: 'P04637'
+                    accession: 'P04637',
+                    format: 'json',
+                    include_isoforms: true
                 }
             }
         };
@@ -99,7 +100,7 @@ class UniProtMCPQuickStart {
                 name: 'data_manager',
                 arguments: {
                     operation: 'fetch_and_stage',
-                    accessions: 'P04637,P53_HUMAN,Q92793',
+                    accessions: 'P04637,Q92793',
                     fields: 'accession,protein_name,gene_names,organism_name'
                 }
             }
@@ -138,7 +139,7 @@ class UniProtMCPQuickStart {
                 arguments: {
                     operation: 'query',
                     data_access_id: dataAccessId,
-                    sql: 'SELECT accession, protein_name, organism_name FROM proteins LIMIT 10'
+                    sql: "SELECT json_extract(data, '$.primaryAccession') as accession, json_extract(data, '$.proteinDescription.recommendedName.fullName.value') as protein_name, json_extract(data, '$.organism.scientificName') as organism_name FROM protein LIMIT 10"
                 }
             }
         };
@@ -207,11 +208,10 @@ class UniProtMCPQuickStart {
                 payload = {
                     method: 'tools/call',
                     params: {
-                        name: 'uniprot_query',
+                        name: 'uniprot_search',
                         arguments: {
-                            operation: 'search',
                             query: query,
-                            limit: parseInt(limit)
+                            size: parseInt(limit)
                         }
                     }
                 };
@@ -221,10 +221,10 @@ class UniProtMCPQuickStart {
                 payload = {
                     method: 'tools/call',
                     params: {
-                        name: 'uniprot_query',
+                        name: 'uniprot_entry',
                         arguments: {
-                            operation: 'protein_details',
-                            accession: accession
+                            accession: accession,
+                            format: 'json'
                         }
                     }
                 };

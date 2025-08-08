@@ -14,6 +14,7 @@ import {
 	ProteinsAPIGenomeTool 
 } from "./proteins-api.js";
 import { DataManagerTool } from "./data-manager.js";
+import { UniRefClusterTool, UniParcEntryTool } from "./staging.js";
 
 export type { ToolContext } from "./base.js";
 
@@ -68,10 +69,19 @@ export class ToolRegistry {
 		proteinsAPIGenomeTool.register();
 		this.tools.push(proteinsAPIGenomeTool);
 
-		// Register data management tools
+        // Register data management tools
 		const dataManagerTool = new DataManagerTool(this.context);
 		dataManagerTool.register();
 		this.tools.push(dataManagerTool);
+
+        // Register UniRef/UniParc tools
+        const uniRefTool = new UniRefClusterTool(this.context);
+        uniRefTool.register();
+        this.tools.push(uniRefTool);
+
+        const uniParcTool = new UniParcEntryTool(this.context);
+        uniParcTool.register();
+        this.tools.push(uniParcTool);
 	}
 
 	getTools(): BaseTool[] {

@@ -169,7 +169,14 @@ export class ProteinsAPIVariationTool extends BaseTool {
 				try {
 					return await this.handleProteinVariation(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `Proteins API Variation Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'Proteins API Variation',
+						'variation',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);
@@ -244,7 +251,14 @@ export class ProteinsAPIProteomicsTool extends BaseTool {
 				try {
 					return await this.handleProteomics(params);
 				} catch (error) {
-					return { content: [{ type: "text" as const, text: `Proteins API Proteomics Error: ${error instanceof Error ? error.message : String(error)}` }] };
+					const enhancedError = this.formatEnhancedError(
+						error instanceof Error ? error : String(error),
+						'Proteins API Proteomics',
+						'proteomics',
+						params,
+						error instanceof Error && 'status' in error ? (error as any).status : undefined
+					);
+					return { content: [{ type: "text" as const, text: enhancedError }] };
 				}
 			}
 		);

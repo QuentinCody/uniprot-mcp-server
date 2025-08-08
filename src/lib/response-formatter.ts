@@ -97,7 +97,7 @@ export class EnhancedErrorFormatter {
     const invalidFields = fieldMatches ? fieldMatches.map(match => match.replace(/'/g, '')) : [];
     
     for (const invalidField of invalidFields) {
-      const possibleCorrections = this.COMMON_FIELD_MISTAKES[invalidField] || 
+      const possibleCorrections = (this.COMMON_FIELD_MISTAKES as Record<string, string[]>)[invalidField] || 
         this.findSimilarFields(invalidField);
       
       if (possibleCorrections.length > 0) {
@@ -105,7 +105,8 @@ export class EnhancedErrorFormatter {
           type: 'field_correction',
           title: `Field '${invalidField}' correction`,
           suggestion: `Did you mean: ${possibleCorrections.join(', ')}?`,
-          example: `L fields: "${invalidField}"\n fields: "${possibleCorrections[0]}"`
+          example: `fields: "${invalidField}"
+=> fields: "${possibleCorrections[0]}"`
         });
       }
     }
@@ -154,7 +155,7 @@ query: "go:0008144" # drug binding GO term`
         type: 'syntax_help',
         title: 'Wildcard Usage',
         suggestion: 'Use wildcards at the end only, not at the beginning',
-        example: 'L cc_function:*aging*\n cc_function:aging OR cc_function:"cellular aging"'
+        example: 'cc_function:*aging*\n=> cc_function:aging OR cc_function:"cellular aging"'
       });
     }
     
@@ -181,8 +182,8 @@ query: "go:0008144" # drug binding GO term`
         type: 'query_template',
         title: 'Staged Data Query Help',
         suggestion: 'All UniProt data is stored as JSON in the "data" column. Use json_extract() to access fields.',
-        example: `L SELECT accession FROM protein
- SELECT json_extract(data, '$.primaryAccession') as accession FROM protein
+        example: `SELECT accession FROM protein
+=> SELECT json_extract(data, '$.primaryAccession') as accession FROM protein
 
 Common JSON paths:
 - Accession: '$.primaryAccession'
@@ -328,7 +329,7 @@ Valid SQLite JSON paths:
     let response = `${enhancedError.context.toolName} Error: ${enhancedError.message}`;
     
     if (enhancedError.suggestions.length > 0) {
-      response += '\n\n=� Helpful Hints:';
+      response += '\n\nHelpful Hints:';
       
       for (const suggestion of enhancedError.suggestions) {
         response += `\n\n**${suggestion.title}:**\n${suggestion.suggestion}`;
@@ -345,32 +346,29 @@ Valid SQLite JSON paths:
 
 export class StagingGuideFormatter {
   static formatSchemaWithGuide(schema: any, dataAccessId: string): string {
-    let response = `**Dataset Schema** for \`${dataAccessId}\`:\n\n`;
-    
-    // Add JSON path guide first
-    response += `=� **Common JSON Extraction Patterns:**\n`;
-    response += `- Accession: \`json_extract(data, '$.primaryAccession')\`\n`;
-    response += `- Gene Name: \`json_extract(data, '$.genes[0].geneName.value')\`\n`;
-    response += `- Protein Name: \`json_extract(data, '$.proteinDescription.recommendedName.fullName.value')\`\n`;
-    response += `- Sequence: \`json_extract(data, '$.sequence.value')\`\n`;
-    response += `- Length: \`json_extract(data, '$.sequence.length')\`\n`;
-    response += `- Organism: \`json_extract(data, '$.organism.scientificName')\`\n\n`;
-    
-    // Add query template
-    response += `= **Query Template:**\n`;
-    response += `\`\`\`sql\n`;
-    response += `SELECT \n`;
-    response += `  json_extract(data, '$.primaryAccession') as accession,\n`;
-    response += `  json_extract(data, '$.genes[0].geneName.value') as gene_name\n`;
-    response += `FROM protein \n`;
-    response += `WHERE json_extract(data, '$.organism.scientificName') = 'Homo sapiens'\n`;
-    response += `LIMIT 10;\n`;
-    response += `\`\`\`\n\n`;
-    
-    // Add the actual schema
-    response += `=� **Schema Details:**\n`;
-    response += JSON.stringify(schema, null, 2);
-    
-    return response;
+  let response = `**Dataset Schema** for \`${dataAccessId}\`:\n\n`;
+
+  // Compact JSON path guide
+  response += `Common JSON Extraction Patterns:\n`;
+  response += `- Accession: \`json_extract(data, '$.primaryAccession')\`\n`;
+  response += `- Gene Name: \`json_extract(data, '$.genes[0].geneName.value')\`\n`;
+  response += `- Protein Name: \`json_extract(data, '$.proteinDescription.recommendedName.fullName.value')\`\n`;
+  response += `- Length: \`json_extract(data, '$.sequence.length')\`\n`;
+  response += `- Organism: \`json_extract(data, '$.organism.scientificName')\`\n\n`;
+
+  // Query templates
+  response += `Query Templates:\n`;
+  response += `\n1) Sample rows\n`;
+  response += `\`\`\`sql\nSELECT json_extract(data, '$') FROM protein LIMIT 3;\n\`\`\`\n`;
+  response += `\n2) Basic fields\n`;
+  response += `\`\`\`sql\nSELECT json_extract(data, '$.primaryAccession') as accession, json_extract(data, '$.sequence.length') as len FROM protein LIMIT 10;\n\`\`\`\n`;
+  response += `\n3) Count\n`;
+  response += `\`\`\`sql\nSELECT COUNT(*) as total FROM protein;\n\`\`\`\n\n`;
+
+  // Actual schema
+  response += `Schema Details:\n`;
+  response += JSON.stringify(schema, null, 2);
+
+  return response;
   }
 }

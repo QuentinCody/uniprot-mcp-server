@@ -251,7 +251,8 @@ The server will be available at:
     "name": "data_manager", 
     "arguments": {
       "operation": "fetch_and_stage",
-      "accessions": "P04637,P53_HUMAN,Q92793"
+      "accessions": "P04637,Q92793",
+      "fields": "accession,protein_name,gene_names,organism_name"
     }
   }
 }
@@ -271,21 +272,14 @@ Data is normalized into tables like:
 
 ### Example SQL Queries
 ```sql
--- Find proteins by gene name
-SELECT * FROM proteins p 
-JOIN gene_names g ON p.accession = g.accession 
-WHERE g.gene_name LIKE 'TP53%';
-
--- Analyze protein lengths by organism
-SELECT organism_name, AVG(sequence_length), COUNT(*) 
-FROM proteins 
-GROUP BY organism_name;
-
--- Find proteins with specific features
-SELECT p.accession, p.protein_name, f.description
-FROM proteins p
-JOIN features f ON p.accession = f.accession
-WHERE f.type = 'DOMAIN';
+-- Query staged JSON using SQLite JSON1
+SELECT 
+  json_extract(data, '$.primaryAccession') as accession,
+  json_extract(data, '$.genes[0].geneName.value') as gene_name,
+  json_extract(data, '$.sequence.length') as length
+FROM protein
+WHERE json_extract(data, '$.organism.scientificName') = 'Homo sapiens'
+LIMIT 10;
 ```
 
 ## API Endpoints and Rate Limits
