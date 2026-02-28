@@ -5,7 +5,7 @@
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"deploy:safe": "npm run validate && npm run deploy",
-		"dev": "wrangler dev",
+		"dev": "wrangler dev --port 8800",
 		"format": "biome format --write",
 		"lint:fix": "biome lint --fix",
 		"start": "wrangler dev",
