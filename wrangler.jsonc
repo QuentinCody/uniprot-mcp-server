@@ -37,6 +37,9 @@
 			"new_sqlite_classes": ["JsonToSqlStorageDO", "UniProtMCP"]
 		}
 	],
+	"alias": {
+		"ai": "./src/ai-stub.ts"
+	},
 	"observability": {
 		"enabled": true
 	}
